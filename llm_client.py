@@ -71,11 +71,14 @@ Generate a complete worksheet specification in JSON format."""
                 {"role": "user", "content": user_prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.7,
-            timeout=30  # 30 second timeout
+            temperature=0.7
         )
         
-        return json.loads(response.choices[0].message.content)
+        content = response.choices[0].message.content
+        if content is None:
+            raise Exception("No content received from OpenAI")
+        
+        return json.loads(content)
     
     except Exception as e:
         logging.error(f"Failed to generate worksheet spec: {e}")
