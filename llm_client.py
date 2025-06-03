@@ -52,15 +52,14 @@ Return a JSON object with this exact structure:
 
 Keep layout within 612x792 points (letter size). Include 5-10 educational elements."""
 
-        response = openai_client.chat.completions.create(
+        response = openai_client.responses.create(
             model="gpt-4.1",
-            messages=[{"role": "user", "content": prompt}]
+            input=prompt
         )
-
+        
         # Parse the JSON from the response
         import re
-        content = response.choices[0].message.content
-        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        json_match = re.search(r'\{.*\}', response.output_text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
         else:
