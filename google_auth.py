@@ -44,7 +44,9 @@ def get_flow():
                 "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo"
             }
         },
-        scopes=["openid", "email", "profile"]
+        scopes=["https://www.googleapis.com/auth/userinfo.email", 
+                "https://www.googleapis.com/auth/userinfo.profile", 
+                "openid"]
     )
     flow.redirect_uri = DEV_REDIRECT_URL
     return flow
@@ -90,7 +92,9 @@ def callback():
         
         # Exchange code for token
         flow = get_flow()
-        flow.fetch_token(authorization_response=request.url)
+        # Fix the authorization response URL to use HTTPS
+        auth_response = request.url.replace("http://", "https://")
+        flow.fetch_token(authorization_response=auth_response)
         
         # Get user info
         credentials = flow.credentials
@@ -136,10 +140,12 @@ def callback():
                 return redirect(url_for("index"))
         
         # Log in the user
-        login_user(user)
+        login_user(user, remember=True)
         session.pop("state", None)  # Clean up session
         
-        logging.info(f"User logged in successfully: {email}")
+        logging.info(f"User logged in successfully: {email}, user_id: {user.id}")
+        logging.info(f"Session after login: {session}")
+        logging.info(f"Current user authenticated: {user.is_authenticated}")
         return redirect(url_for("index"))
         
     except Exception as e:

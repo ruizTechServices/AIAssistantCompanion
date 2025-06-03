@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Flask, send_from_directory, jsonify, request
+from flask import Flask, send_from_directory, jsonify, request, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_required, current_user
 from sqlalchemy.orm import DeclarativeBase
@@ -37,7 +37,14 @@ login_manager.init_app(app)
 @login_manager.user_loader
 def load_user(user_id):
     from models import User
-    return User.query.get(int(user_id))
+    logging.info(f"Loading user with ID: {user_id}")
+    try:
+        user = User.query.get(int(user_id))
+        logging.info(f"Loaded user: {user.email if user else 'None'}")
+        return user
+    except Exception as e:
+        logging.error(f"Error loading user {user_id}: {e}")
+        return None
 
 # Register blueprints
 from google_auth import google_auth
@@ -50,8 +57,15 @@ with app.app_context():
 
 @app.route("/")
 def index():
+    logging.info(f"Index route accessed. Current user authenticated: {current_user.is_authenticated}")
+    logging.info(f"Current user: {current_user}")
+    logging.info(f"Session data: {session}")
+    
     if not current_user.is_authenticated:
+        logging.info("User not authenticated, showing login page")
         return send_from_directory("static", "login.html")
+    
+    logging.info(f"User authenticated: {current_user.email}, showing main app")
     return send_from_directory("static", "index.html")
 
 @app.route("/api/worksheet", methods=["POST"])
