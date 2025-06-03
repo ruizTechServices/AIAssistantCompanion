@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Worksheet Generator - Login</title>
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .login-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 3rem;
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            margin: 2rem;
+        }
+        
+        .login-icon {
+            font-size: 4rem;
+            color: #667eea;
+            margin-bottom: 1.5rem;
+        }
+        
+        .login-title {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 0.5rem;
+        }
+        
+        .login-subtitle {
+            color: #718096;
+            margin-bottom: 2rem;
+        }
+        
+        .google-btn {
+            background: #4285f4;
+            border: none;
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(66, 133, 244, 0.3);
+        }
+        
+        .google-btn:hover {
+            background: #3367d6;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(66, 133, 244, 0.4);
+            color: white;
+            text-decoration: none;
+        }
+        
+        .google-icon {
+            background: white;
+            border-radius: 50%;
+            padding: 0.5rem;
+            color: #4285f4;
+        }
+        
+        .features {
+            margin-top: 2.5rem;
+            text-align: left;
+        }
+        
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+            color: #4a5568;
+        }
+        
+        .feature-icon {
+            color: #667eea;
+            font-size: 1.1rem;
+        }
+        
+        /* Dark theme support */
+        [data-bs-theme="dark"] .login-card {
+            background: rgba(45, 55, 72, 0.95);
+            color: #e2e8f0;
+        }
+        
+        [data-bs-theme="dark"] .login-title {
+            color: #e2e8f0;
+        }
+        
+        [data-bs-theme="dark"] .login-subtitle {
+            color: #a0aec0;
+        }
+        
+        [data-bs-theme="dark"] .feature-item {
+            color: #cbd5e0;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="login-icon">
+            <i class="fas fa-file-alt"></i>
+        </div>
+        
+        <h1 class="login-title">Worksheet Generator</h1>
+        <p class="login-subtitle">Create AI-powered educational content for your students</p>
+        
+        <a href="/google_login" class="google-btn">
+            <div class="google-icon">
+                <i class="fab fa-google"></i>
+            </div>
+            Sign in with Google
+        </a>
+        
+        <div class="features">
+            <div class="feature-item">
+                <i class="fas fa-magic feature-icon"></i>
+                <span>AI-generated worksheets</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-palette feature-icon"></i>
+                <span>Customizable designs</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-download feature-icon"></i>
+                <span>PDF & interactive formats</span>
+            </div>
+            <div class="feature-item">
+                <i class="fas fa-images feature-icon"></i>
+                <span>AI-generated images</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
