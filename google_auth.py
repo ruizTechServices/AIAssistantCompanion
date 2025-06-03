@@ -14,20 +14,17 @@ from google.oauth2 import id_token
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
 
-# Make sure to use this redirect URL. It has to match the one in the whitelist
-DEV_REDIRECT_URL = f'https://{os.environ.get("REPLIT_DEV_DOMAIN", "localhost:5000")}/google_login/callback'
+# Redirect URL must match the one configured in your Google Cloud Console
+REDIRECT_URL = os.environ.get("GOOGLE_REDIRECT_URL", "http://localhost:5000/google_login/callback")
 
 # ALWAYS display setup instructions to the user:
 print(f"""To make Google authentication work:
 1. Go to https://console.cloud.google.com/apis/credentials
 2. Create a new OAuth 2.0 Client ID
-3. Add {DEV_REDIRECT_URL} to Authorized redirect URIs
-
-For detailed instructions, see:
-https://docs.replit.com/additional-resources/google-auth-in-flask#set-up-your-oauth-app--client
+3. Add {REDIRECT_URL} to Authorized redirect URIs
 """)
 
-# Allow insecure transport for development (Replit handles HTTPS)
+# Allow insecure transport for local development
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
 google_auth = Blueprint("google_auth", __name__)
@@ -48,7 +45,7 @@ def get_flow():
                 "https://www.googleapis.com/auth/userinfo.profile", 
                 "openid"]
     )
-    flow.redirect_uri = DEV_REDIRECT_URL
+    flow.redirect_uri = REDIRECT_URL
     return flow
 
 @google_auth.route("/google_login")
