@@ -12,7 +12,7 @@ def generate_embedding(text):
     """Generate embedding for text using OpenAI."""
     try:
         response = openai_client.embeddings.create(
-            model="text-embedding-ada-002",
+            model="text-embedding-3-small",
             input=text
         )
         return response.data[0].embedding

@@ -1,31 +1,45 @@
 import threading
 import logging
-from app import db
-from models import Worksheet
-from llm_client import generate_worksheet_spec
-from image_client import generate_line_art_image, save_image
-from pdf_generator import create_pdf_from_spec
-from interactive_generator import generate_interactive_html
 
 def start_generation_job(job_id):
     """Start background thread for worksheet generation."""
+    logging.info(f"Starting generation thread for job {job_id}")
     thread = threading.Thread(target=run_generation_job, args=(job_id,))
     thread.daemon = True
     thread.start()
+    logging.info(f"Thread started for job {job_id}")
 
 def run_generation_job(job_id):
     """Background job to generate worksheet."""
+    import os
+    import sys
+    
+    # Add current directory to path to ensure imports work
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    
     try:
-        with db.app.app_context():  # Create application context
+        logging.info(f"Worker thread executing for job {job_id}")
+        
+        # Import everything inside the function to avoid circular imports
+        from app import app, db
+        from models import Worksheet  
+        from llm_client import generate_worksheet_spec
+        from image_client import generate_line_art_image, save_image
+        from pdf_generator import create_pdf_from_spec
+        from interactive_generator import generate_interactive_html
+        
+        with app.app_context():
+            logging.info(f"App context created for job {job_id}")
+            
             # Update status to in_progress
             worksheet = Worksheet.query.get(job_id)
             if not worksheet:
-                logging.error(f"Worksheet {job_id} not found")
+                logging.error(f"Worksheet {job_id} not found in database")
                 return
             
+            logging.info(f"Found worksheet {job_id}, updating status to in_progress")
             worksheet.status = "in_progress"
             db.session.commit()
-            logging.info(f"Started worksheet generation for job {job_id}")
             
             # Generate worksheet specification
             logging.info(f"Step 1/4: Generating worksheet specification for {job_id}")

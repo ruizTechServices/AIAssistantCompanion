@@ -86,13 +86,17 @@ def create_worksheet():
     # Generate embedding for the topic
     from llm_client import generate_embedding
     try:
+        logging.info(f"Generating embedding for topic: {data['topic']}")
         embedding = generate_embedding(data["topic"])
+        logging.info(f"Embedding generated successfully with {len(embedding)} dimensions")
     except Exception as e:
         logging.error(f"Failed to generate embedding: {e}")
         return jsonify({"error": "Failed to process request"}), 500
     
     # Create new worksheet record
     job_id = str(uuid.uuid4())
+    logging.info(f"Creating worksheet record with job_id: {job_id}")
+    
     worksheet = Worksheet(
         id=job_id,
         user_id=current_user.id,
@@ -101,11 +105,23 @@ def create_worksheet():
         status="pending"
     )
     
-    db.session.add(worksheet)
-    db.session.commit()
+    try:
+        db.session.add(worksheet)
+        db.session.commit()
+        logging.info(f"Worksheet record saved to database: {job_id}")
+    except Exception as e:
+        logging.error(f"Database error saving worksheet: {e}")
+        db.session.rollback()
+        return jsonify({"error": "Database error"}), 500
     
     # Start background job
-    start_generation_job(job_id)
+    logging.info(f"Starting background job for worksheet: {job_id}")
+    try:
+        start_generation_job(job_id)
+        logging.info(f"Background job started successfully for: {job_id}")
+    except Exception as e:
+        logging.error(f"Failed to start background job: {e}")
+        return jsonify({"error": "Failed to start generation"}), 500
     
     return jsonify({"job_id": job_id}), 202
 
