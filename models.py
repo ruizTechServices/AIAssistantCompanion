@@ -13,6 +13,10 @@ class User(UserMixin, db.Model):
     
     # Relationship with worksheets
     worksheets = db.relationship('Worksheet', backref='user', lazy=True)
+    
+    def __init__(self, username=None, email=None):
+        self.username = username
+        self.email = email
 
 class Worksheet(db.Model):
     __tablename__ = "worksheets"
