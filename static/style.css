@@ -1,0 +1,148 @@
+/* Custom styles for the worksheet generator */
+
+:root {
+    --primary-color: 210 53% 53%; /* Bootstrap primary equivalent */
+    --success-color: 134 61% 41%; /* Bootstrap success equivalent */
+    --warning-color: 45 100% 51%; /* Bootstrap warning equivalent */
+    --danger-color: 354 70% 54%; /* Bootstrap danger equivalent */
+    --background-color: 210 11% 98%; /* Light background */
+}
+
+body {
+    min-height: 100vh;
+    background: linear-gradient(135deg, hsl(var(--background-color)) 0%, hsl(210 11% 95%) 100%);
+}
+
+.navbar {
+    background: linear-gradient(90deg, hsl(var(--primary-color)) 0%, hsl(220 53% 48%) 100%) !important;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.card {
+    border: none;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+}
+
+.card-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px 12px 0 0 !important;
+}
+
+.btn {
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, hsl(var(--primary-color)) 0%, hsl(220 53% 48%) 100%);
+    border: none;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, hsl(220 53% 48%) 0%, hsl(var(--primary-color)) 100%);
+    box-shadow: 0 4px 15px rgba(13, 110, 253, 0.3);
+}
+
+.form-control, .form-select {
+    border-radius: 8px;
+    border: 2px solid rgba(0, 0, 0, 0.1);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: hsl(var(--primary-color));
+    box-shadow: 0 0 0 0.2rem hsla(var(--primary-color), 0.25);
+}
+
+.progress {
+    height: 8px;
+    border-radius: 4px;
+}
+
+.worksheet-item {
+    transition: transform 0.2s ease;
+}
+
+.worksheet-item:hover {
+    transform: translateX(5px);
+}
+
+.status-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-pending {
+    background-color: hsl(var(--warning-color));
+}
+
+.status-in-progress {
+    background-color: hsl(var(--primary-color));
+    animation: pulse 1.5s infinite;
+}
+
+.status-done {
+    background-color: hsl(var(--success-color));
+}
+
+.status-error {
+    background-color: hsl(var(--danger-color));
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--bs-text-muted);
+}
+
+.empty-state i {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}
+
+/* Dark theme adjustments */
+[data-bs-theme="dark"] body {
+    background: linear-gradient(135deg, hsl(210 11% 8%) 0%, hsl(210 11% 12%) 100%);
+}
+
+[data-bs-theme="dark"] .navbar {
+    background: linear-gradient(90deg, hsl(210 53% 25%) 0%, hsl(220 53% 20%) 100%) !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
+    .card-body {
+        padding: 1.5rem 1rem;
+    }
+    
+    .btn-lg {
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+    }
+}
