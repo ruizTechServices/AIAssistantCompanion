@@ -150,6 +150,26 @@ def get_worksheet_status(job_id):
     
     return jsonify(response)
 
+@app.route("/api/worksheet/<job_id>/cancel", methods=['POST'])
+@login_required
+def cancel_worksheet(job_id):
+    """Cancel a worksheet generation job."""
+    from models import Worksheet
+    
+    worksheet = Worksheet.query.filter_by(id=job_id, user_id=current_user.id).first()
+    if not worksheet:
+        return jsonify({"error": "Worksheet not found"}), 404
+    
+    # Only allow cancelling if job is pending or in progress
+    if worksheet.status in ['pending', 'in_progress']:
+        worksheet.status = 'cancelled'
+        worksheet.progress_step = 'Cancelled by user'
+        db.session.commit()
+        logging.info(f"Worksheet {job_id} cancelled by user {current_user.id}")
+        return jsonify({'success': True, 'message': 'Worksheet generation cancelled'})
+    else:
+        return jsonify({'success': False, 'message': 'Cannot cancel completed or error jobs'}), 400
+
 @app.route("/worksheets/<path:filename>")
 @login_required
 def serve_worksheet(filename):

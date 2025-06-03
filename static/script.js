@@ -100,6 +100,10 @@ function startPolling() {
             } else if (status.status === 'error') {
                 stopPolling();
                 showError(status.error_message);
+            } else if (status.status === 'cancelled') {
+                stopPolling();
+                showAlert('Worksheet generation was cancelled.', 'warning');
+                hideGenerationStatus();
             }
             
         } catch (error) {
@@ -121,18 +125,46 @@ function updateStatusDisplay(status) {
     const statusText = document.getElementById('statusText');
     const statusDescription = document.getElementById('statusDescription');
     const progressBar = document.querySelector('.progress-bar');
+    const cancelButton = document.getElementById('cancelButton');
+    
+    // Update progress bar with actual percentage
+    const progressPercent = status.progress_percent || 0;
+    progressBar.style.width = `${progressPercent}%`;
+    progressBar.setAttribute('aria-valuenow', progressPercent);
+    
+    // Update step description
+    const stepText = status.progress_step || '';
     
     switch (status.status) {
         case 'pending':
             statusText.textContent = 'Queued for processing...';
-            statusDescription.textContent = 'Your worksheet is in the queue and will start processing shortly.';
-            progressBar.style.width = '10%';
+            statusDescription.textContent = stepText || 'Your worksheet is in the queue and will start processing shortly.';
+            if (cancelButton) cancelButton.style.display = 'inline-block';
             break;
         case 'in_progress':
             statusText.textContent = 'AI is generating your worksheet...';
-            statusDescription.textContent = 'Creating content structure, generating text, and assembling your worksheet. This may take 1-2 minutes.';
-            progressBar.style.width = '60%';
+            statusDescription.textContent = stepText || 'Creating content structure, generating text, and assembling your worksheet. This may take 1-2 minutes.';
             progressBar.classList.add('progress-bar-animated');
+            if (cancelButton) cancelButton.style.display = 'inline-block';
+            break;
+        case 'done':
+            statusText.textContent = 'Worksheet completed!';
+            statusDescription.textContent = 'Your worksheet has been generated successfully.';
+            progressBar.style.width = '100%';
+            progressBar.classList.remove('progress-bar-animated');
+            if (cancelButton) cancelButton.style.display = 'none';
+            break;
+        case 'error':
+            statusText.textContent = 'Generation failed';
+            statusDescription.textContent = status.error_message || 'An error occurred during generation.';
+            progressBar.classList.remove('progress-bar-animated');
+            if (cancelButton) cancelButton.style.display = 'none';
+            break;
+        case 'cancelled':
+            statusText.textContent = 'Generation cancelled';
+            statusDescription.textContent = 'Worksheet generation was cancelled by user.';
+            progressBar.classList.remove('progress-bar-animated');
+            if (cancelButton) cancelButton.style.display = 'none';
             break;
     }
 }
