@@ -354,3 +354,34 @@ document.addEventListener('visibilitychange', function() {
 window.addEventListener('beforeunload', function() {
     stopPolling();
 });
+
+// Cancellation function
+async function cancelWorksheet() {
+    if (!currentJobId) {
+        showAlert('No active generation to cancel.', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/worksheet/${currentJobId}/cancel`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            showAlert(result.message, 'warning');
+            stopPolling();
+            hideGenerationStatus();
+            currentJobId = null;
+        } else {
+            const error = await response.json();
+            showAlert(error.message || 'Failed to cancel generation', 'danger');
+        }
+    } catch (error) {
+        console.error('Error cancelling worksheet:', error);
+        showAlert('Error cancelling generation. Please try again.', 'danger');
+    }
+}
