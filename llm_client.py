@@ -21,64 +21,49 @@ def generate_embedding(text):
         raise
 
 def generate_worksheet_spec(prompt_data):
-    """Generate worksheet specification using GPT-4o."""
+    """Generate worksheet specification using OpenAI."""
     try:
-        system_prompt = """You are an expert educational content creator. Generate a detailed worksheet specification in JSON format.
-
-The worksheet should be appropriate for the specified grade level and topic, with engaging activities and clear instructions.
-
-Return a JSON object with the following structure:
-{
-    "title": "Worksheet Title",
-    "instructions": "General instructions for the worksheet",
-    "elements": [
-        {
-            "type": "text",
-            "content": "Text content or question",
-            "position": {"x": 50, "y": 100},
-            "style": {"fontSize": 12, "bold": false}
-        },
-        {
-            "type": "image",
-            "description": "Description for image generation",
-            "position": {"x": 200, "y": 150},
-            "size": {"width": 200, "height": 150}
-        },
-        {
-            "type": "input_field",
-            "placeholder": "Answer space",
-            "position": {"x": 50, "y": 200},
-            "size": {"width": 300, "height": 30}
-        }
-    ]
-}
-
-Keep the layout within 612x792 points (standard letter size). Include appropriate spacing and clear visual hierarchy."""
-
-        user_prompt = f"""Create a worksheet with the following specifications:
+        prompt = f"""Create a detailed educational worksheet specification in JSON format for:
 - Grade Level: {prompt_data['gradeLevel']}
 - Topic: {prompt_data['topic']}
 - Activities: {prompt_data['activities']}
 - Style: {prompt_data['style']}
 - Images Allowed: {prompt_data['imagesAllowed']}
 
-Generate a complete worksheet specification in JSON format."""
+Return a JSON object with this exact structure:
+{{
+    "title": "Worksheet Title",
+    "instructions": "General instructions for the worksheet",
+    "elements": [
+        {{
+            "type": "text",
+            "content": "Text content or question",
+            "position": {{"x": 50, "y": 100}},
+            "style": {{"fontSize": 12, "bold": false}}
+        }},
+        {{
+            "type": "input_field",
+            "placeholder": "Answer space",
+            "position": {{"x": 50, "y": 200}},
+            "size": {{"width": 300, "height": 30}}
+        }}
+    ]
+}}
 
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.7
+Keep layout within 612x792 points (letter size). Include 5-10 educational elements."""
+
+        response = openai_client.responses.create(
+            model="gpt-4.1",
+            input=prompt
         )
         
-        content = response.choices[0].message.content
-        if content is None:
-            raise Exception("No content received from OpenAI")
-        
-        return json.loads(content)
+        # Parse the JSON from the response
+        import re
+        json_match = re.search(r'\{.*\}', response.output_text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+        else:
+            raise Exception("No valid JSON found in response")
     
     except Exception as e:
         logging.error(f"Failed to generate worksheet spec: {e}")

@@ -26,7 +26,9 @@ class Worksheet(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = db.Column(db.DateTime(timezone=True), onupdate=func.now())
     prompt_json = db.Column(db.JSON, nullable=False)
-    status = db.Column(db.String(20), nullable=False, default="pending")  # pending|in_progress|done|error
+    status = db.Column(db.String(20), nullable=False, default="pending")  # pending|in_progress|done|error|cancelled
+    progress_step = db.Column(db.String(50), nullable=True)  # Current step description
+    progress_percent = db.Column(db.Integer, default=0)  # Progress percentage 0-100
     pdf_path = db.Column(db.String(255), nullable=True)
     interactive_path = db.Column(db.String(255), nullable=True)
     error_message = db.Column(db.Text, nullable=True)

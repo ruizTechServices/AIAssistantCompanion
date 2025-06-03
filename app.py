@@ -137,6 +137,8 @@ def get_worksheet_status(job_id):
     
     response = {
         "status": worksheet.status,
+        "progress_step": worksheet.progress_step,
+        "progress_percent": worksheet.progress_percent,
         "created_at": worksheet.created_at.isoformat()
     }
     

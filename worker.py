@@ -39,12 +39,26 @@ def run_generation_job(job_id):
             
             logging.info(f"Found worksheet {job_id}, updating status to in_progress")
             worksheet.status = "in_progress"
+            worksheet.progress_step = "Starting generation"
+            worksheet.progress_percent = 5
             db.session.commit()
+            
+            # Check for cancellation
+            if worksheet.status == "cancelled":
+                logging.info(f"Job {job_id} was cancelled")
+                return
             
             # Generate worksheet specification
             logging.info(f"Step 1/4: Generating worksheet specification for {job_id}")
+            worksheet.progress_step = "Generating content with AI"
+            worksheet.progress_percent = 20
+            db.session.commit()
+            
             spec = generate_worksheet_spec(worksheet.prompt_json)
             logging.info(f"Generated worksheet spec with {len(spec.get('elements', []))} elements")
+            
+            worksheet.progress_percent = 40
+            db.session.commit()
             
             # Generate images if needed
             logging.info(f"Step 2/4: Processing images for {job_id}")
