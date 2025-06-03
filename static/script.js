@@ -125,13 +125,14 @@ function updateStatusDisplay(status) {
     switch (status.status) {
         case 'pending':
             statusText.textContent = 'Queued for processing...';
-            statusDescription.textContent = 'Your worksheet is in the queue.';
-            progressBar.style.width = '20%';
+            statusDescription.textContent = 'Your worksheet is in the queue and will start processing shortly.';
+            progressBar.style.width = '10%';
             break;
         case 'in_progress':
-            statusText.textContent = 'Generating your worksheet...';
-            statusDescription.textContent = 'AI is creating your custom worksheet with engaging content.';
-            progressBar.style.width = '70%';
+            statusText.textContent = 'AI is generating your worksheet...';
+            statusDescription.textContent = 'Creating content structure, generating text, and assembling your worksheet. This may take 1-2 minutes.';
+            progressBar.style.width = '60%';
+            progressBar.classList.add('progress-bar-animated');
             break;
     }
 }

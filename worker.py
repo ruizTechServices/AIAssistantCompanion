@@ -25,35 +25,44 @@ def run_generation_job(job_id):
             
             worksheet.status = "in_progress"
             db.session.commit()
+            logging.info(f"Started worksheet generation for job {job_id}")
             
             # Generate worksheet specification
-            logging.info(f"Generating worksheet spec for {job_id}")
+            logging.info(f"Step 1/4: Generating worksheet specification for {job_id}")
             spec = generate_worksheet_spec(worksheet.prompt_json)
+            logging.info(f"Generated worksheet spec with {len(spec.get('elements', []))} elements")
             
             # Generate images if needed
+            logging.info(f"Step 2/4: Processing images for {job_id}")
             images_data = {}
             if worksheet.prompt_json.get("imagesAllowed", False):
-                for element in spec.get("elements", []):
-                    if element.get("type") == "image":
-                        description = element.get("description", "")
-                        if description:
-                            try:
-                                logging.info(f"Generating image: {description}")
-                                image_data = generate_line_art_image(description)
-                                image_path = f"worksheets/{job_id}/image_{len(images_data)}.png"
-                                save_image(image_data, image_path)
-                                images_data[description] = image_path
-                            except Exception as e:
-                                logging.error(f"Failed to generate image: {e}")
-                                # Continue without this image
+                image_elements = [e for e in spec.get("elements", []) if e.get("type") == "image"]
+                logging.info(f"Found {len(image_elements)} images to generate")
+                for i, element in enumerate(image_elements):
+                    description = element.get("description", "")
+                    if description:
+                        try:
+                            logging.info(f"Generating image {i+1}/{len(image_elements)}: {description}")
+                            image_data = generate_line_art_image(description)
+                            image_path = f"worksheets/{job_id}/image_{len(images_data)}.png"
+                            save_image(image_data, image_path)
+                            images_data[description] = image_path
+                            logging.info(f"Successfully generated image: {image_path}")
+                        except Exception as e:
+                            logging.error(f"Failed to generate image: {e}")
+                            # Continue without this image
+            else:
+                logging.info("Images disabled, skipping image generation")
             
             # Generate PDF
-            logging.info(f"Generating PDF for {job_id}")
+            logging.info(f"Step 3/4: Generating PDF for {job_id}")
             pdf_path = create_pdf_from_spec(spec, job_id, images_data)
+            logging.info(f"PDF generated: {pdf_path}")
             
             # Generate interactive HTML
-            logging.info(f"Generating interactive HTML for {job_id}")
+            logging.info(f"Step 4/4: Generating interactive HTML for {job_id}")
             html_path = generate_interactive_html(spec, job_id, images_data)
+            logging.info(f"Interactive HTML generated: {html_path}")
             
             # Update worksheet record
             worksheet.status = "done"

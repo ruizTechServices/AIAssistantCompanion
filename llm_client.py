@@ -71,7 +71,8 @@ Generate a complete worksheet specification in JSON format."""
                 {"role": "user", "content": user_prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.7
+            temperature=0.7,
+            timeout=30  # 30 second timeout
         )
         
         return json.loads(response.choices[0].message.content)

@@ -32,3 +32,10 @@ class Worksheet(db.Model):
     error_message = db.Column(db.Text, nullable=True)
     # Store embedding as array of floats - pgvector integration would require additional setup
     embedding = db.Column(ARRAY(db.Float), nullable=True)
+    
+    def __init__(self, id=None, user_id=None, prompt_json=None, embedding=None, status="pending"):
+        self.id = id
+        self.user_id = user_id
+        self.prompt_json = prompt_json
+        self.embedding = embedding
+        self.status = status
