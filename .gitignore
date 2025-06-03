@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Distribution / packaging
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyproject.toml/uv lock files (keep if needed for reproducibility)
+# uv.lock
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+
+# Flask/SQLAlchemy instance folder
+instance/
+
+# Static asset cache
+staticfiles/
+
+# Local env files
+.env
+.env.*
+
+# Misc
+*.orig
+attached_assets/
+worksheets/
