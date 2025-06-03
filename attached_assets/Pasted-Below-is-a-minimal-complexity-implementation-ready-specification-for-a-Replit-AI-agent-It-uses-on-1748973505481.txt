@@ -1,0 +1,1440 @@
+Below is a minimal‐complexity, implementation‐ready specification for a Replit AI agent.  It uses only:
+	•	Python + Flask for the backend
+	•	HTML / CSS / JavaScript for the frontend (pure static files)
+	•	OpenAI APIs (Embeddings, Completions, and Images)
+	•	Replit Postgres (with pgvector) to store prompts, status, embeddings, and file‐paths
+	•	(Optional) an Ollama local endpoint if you want to swap in a local LLM for some tasks
+	•	Google OAuth (Flask integration) to let teachers log in with a Google account
+
+Nothing else (no Supabase, no Heroku, no Next.js).  Follow each numbered step exactly to have a fully working, deployed Teacher‐Aware Worksheet Generator.
+
+⸻
+
+OVERVIEW OF FLOW
+	1.	Teacher visits a static HTML page (index.html) served by Flask.
+	2.	Teacher clicks “Log in with Google” → Google OAuth flow → returns to index.html with a session cookie.
+	3.	Teacher fills out a form (grade level, topic, activities, style, allow‐images) → clicks “Generate Worksheet.”
+	4.	Frontend JS sends a POST /api/worksheet to Flask (JSON body).
+	5.	Flask:
+	•	Verifies teacher is logged in (via Google OAuth session).
+	•	Stores the prompt JSON + a new job_id (UUID), status=“pending”, and an embedding vector (via OpenAI Embeddings API) into Replit Postgres + pgvector.
+	•	Immediately returns { "job_id": "<UUID>" }.
+	•	Spawns a background thread (or asyncio task) to run generate_job(<UUID>).
+	6.	In the background:
+	1.	Fetch the prompt row from Postgres.
+	2.	Call OpenAI Completions (GPT-4) to generate a strict JSON “worksheet spec”, exactly like before (element list with text, trace, and image keys).
+	3.	For each image specification, call OpenAI Images API to generate a black-and-white line-art PNG (512×512).
+	4.	Assemble a one-page PDF (612×792 points) using ReportLab + CairoSVG for any SVG conversions.
+	5.	Generate an “interactive HTML” page that mirrors the PDF layout (absolute CSS).
+	6.	Write both files under a local folder worksheets/<job_id>/:
+
+worksheets/
+  └── <job_id>/
+      ├── worksheet.pdf
+      └── interactive.html
+
+
+	7.	Update the Postgres row: status="done", pdf_path="worksheets/<job_id>/worksheet.pdf", interactive_path="worksheets/<job_id>/interactive.html".
+	8.	If any step fails, update status="error" and save error_message.
+
+	7.	Meanwhile, the frontend (JS) polls GET /api/worksheet/<job_id>/status every 2 seconds.
+	•	If "pending" or "in_progress", it keeps polling.
+	•	When "done", it shows:
+	1.	A “Download PDF” link pointing to /worksheets/<job_id>/worksheet.pdf (served by Flask static route).
+	2.	An <iframe> or link to /worksheets/<job_id>/interactive.html.
+
+⸻
+
+1. ENVIRONMENT & INITIAL SETUP
+	1.	Create a new Replit project (Choose “Flask” template or “Python” template). Name it worksheet_generator.
+	2.	In Replit “Secrets” (Environment Variables), define:
+
+DATABASE_URL=<your‐replit‐postgres‐connection‐string>
+OPENAI_API_KEY=<your‐openai‐api‐key>
+GOOGLE_CLIENT_ID=<your‐google‐oauth‐client‐id>
+GOOGLE_CLIENT_SECRET=<your‐google‐oauth‐client‐secret>
+
+	•	Replit Postgres automatically gives you a DATABASE_URL.
+	•	Obtain Google OAuth credentials at https://console.cloud.google.com/apis & enable “Google+” or “Google Identity” → OAuth 2.0 Client ID.
+
+	3.	In the Replit shell, install Python dependencies:
+
+pip install Flask python-dotenv psycopg2-binary SQLAlchemy pgvector Flask-Login requests openai reportlab cairosvg Jinja2 google-auth google-auth-oauthlib google-auth-httplib2
+
+
+	4.	Project file tree (create these files & folders manually or via Replit UI):
+
+/worksheet_generator
+├── app.py
+├── config.py
+├── models.py
+├── supabase_client.py       ← *deleted, no Supabase used*
+├── llm_client.py
+├── image_client.py
+├── pdf_generator.py
+├── interactive_generator.py
+├── worker.py
+├── requirements.txt
+├── Procfile
+├── templates/
+│    └── interactive_template.html.j2
+├── static/
+│    ├── index.html
+│    ├── style.css
+│    └── script.js
+└── worksheets/              ← folder where generated PDFs/HTML will be written
+
+
+	5.	Confirm that the following things exist and are empty (for now):
+	•	templates/interactive_template.html.j2
+	•	static/index.html
+	•	static/style.css
+	•	static/script.js
+	•	worksheets/ (create the folder; it will hold subfolders per job).
+
+⸻
+
+2. DATABASE & ORM (Replit Postgres + pgvector)
+
+We will use SQLAlchemy + pgvector to manage a worksheets table in Postgres.
+
+2.1. config.py
+
+# config.py
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # Replit Postgres connection string
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+
+2.2. models.py
+
+# models.py
+
+import uuid
+from datetime import datetime
+from sqlalchemy import Column, String, Text, DateTime, JSON, LargeBinary
+from sqlalchemy.dialects.postgresql import UUID, VECTOR
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.sql import func
+
+Base = declarative_base()
+
+class Worksheet(Base):
+    __tablename__ = "worksheets"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    prompt_json = Column(JSON, nullable=False)
+    status = Column(String, nullable=False, default="pending")  # pending|in_progress|done|error
+    pdf_path = Column(String, nullable=True)           # e.g. "worksheets/<id>/worksheet.pdf"
+    interactive_path = Column(String, nullable=True)   # e.g. "worksheets/<id>/interactive.html"
+    error_message = Column(Text, nullable=True)
+    embedding = Column(VECTOR(1536), nullable=True)    # OpenAI embedding for search (dimension 1536)
+
+Note: VECTOR(1536) requires that you installed pgvector.  Replit Postgres typically has pgvector extension available; if not, run:
+
+CREATE EXTENSION IF NOT EXISTS vector;
+
+in the Replit Postgres SQL editor before creating tables.
+
+2.3. Database initialization
+
+In your Replit shell, after writing models.py, do:
+
+python - << 'EOF'
+from sqlalchemy import create_engine
+from config import DATABASE_URL
+from models import Base
+
+engine = create_engine(DATABASE_URL)
+Base.metadata.create_all(engine)
+print("Tables created.")
+EOF
+
+This creates the worksheets table with all columns, including the VECTOR column for embeddings.
+
+⸻
+
+3. GOOGLE OAUTH (Flask Integration)
+
+We will use Flask-Login and google-auth-oauthlib to let teachers log in with Google.  We only need a basic “login only” flow—no user database except session storage.
+
+3.1. app.py (partial: imports, initialization)
+
+# app.py
+
+import os
+import json
+import threading
+import uuid
+import io
+from flask import Flask, request, redirect, url_for, session, jsonify, render_template, send_file, send_from_directory
+from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin, current_user
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from config import DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OPENAI_API_KEY
+from models import Base, Worksheet
+from llm_client import generate_worksheet_spec
+from image_client import fetch_line_art_image
+from pdf_generator import create_pdf_from_spec
+from interactive_generator import generate_interactive_html
+from worker import run_generation_job
+
+# Flask app and secret key
+app = Flask(__name__)
+app.secret_key = os.urandom(24)
+
+# Flask-Login setup
+login_manager = LoginManager()
+login_manager.login_view = "login"
+login_manager.init_app(app)
+
+# SQLAlchemy setup
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# User class for Flask-Login (no real database of users—just store email in session)
+class User(UserMixin):
+    def __init__(self, email):
+        self.id = email
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User(user_id)
+
+# Google OAuth configuration
+from google_auth_oauthlib.flow import Flow
+import google.auth.transport.requests
+import requests
+
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # For local testing (HTTP)
+GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+
+3.2. Google OAuth Helper Functions
+
+Add these functions in app.py (below the imports):
+
+def get_google_provider_cfg():
+    return requests.get(GOOGLE_DISCOVERY_URL).json()
+
+@app.route("/login")
+def login():
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [url_for("callback", _external=True)],
+                "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo"
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]
+    )
+    flow.redirect_uri = url_for("callback", _external=True)
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true"
+    )
+    session["state"] = state
+    return redirect(authorization_url)
+
+@app.route("/callback")
+def callback():
+    state = session["state"]
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [url_for("callback", _external=True)],
+                "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo"
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
+        state=state
+    )
+    flow.redirect_uri = url_for("callback", _external=True)
+
+    authorization_response = request.url
+    flow.fetch_token(authorization_response=authorization_response)
+    credentials = flow.credentials
+
+    # Get user info
+    request_session = google.auth.transport.requests.Request()
+    id_info = google.oauth2.id_token.verify_oauth2_token(
+        credentials._id_token,
+        request_session,
+        GOOGLE_CLIENT_ID
+    )
+    email = id_info.get("email")
+    user = User(email)
+    login_user(user)
+    return redirect(url_for("index"))
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("index"))
+
+Explanation:
+	•	Visiting /login redirects to Google’s OAuth screen.
+	•	After granting permission, Google calls back to /callback.
+	•	We verify the ID token and log in the user.
+	•	Now current_user.id holds the teacher’s email.
+
+⸻
+
+4. FLASK ROUTES & BACKEND LOGIC
+
+Continue editing app.py below the OAuth code.
+
+4.1. Database Dependency Helper
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+4.2. index.html Route (Home Page)
+
+@app.route("/")
+def index():
+    if not current_user.is_authenticated:
+        return redirect(url_for("login"))
+    # Serve the static index.html from /static/index.html
+    return send_from_directory("static", "index.html")
+
+4.3. API: Create Worksheet (POST /api/worksheet)
+
+@app.route("/api/worksheet", methods=["POST"])
+@login_required
+def create_worksheet_api():
+    """
+    1. Read JSON: { gradeLevel, topic, activities, style, imagesAllowed }
+    2. Validate all keys present.
+    3. Compute embedding for “topic” or entire JSON via OpenAI Embeddings API.
+    4. Insert new row into Postgres: status="pending", prompt_json, embedding=vector.
+    5. Spawn background thread to run run_generation_job(job_id).
+    6. Return { job_id } (202).
+    """
+    data = request.get_json()
+    required = {"gradeLevel", "topic", "activities", "style", "imagesAllowed"}
+    if not data or not required.issubset(data.keys()):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    # 3. Compute embedding
+    import openai
+    openai.api_key = OPENAI_API_KEY
+    embed_resp = openai.Embedding.create(model="text-embedding-ada-002", input=data["topic"])
+    vector = embed_resp["data"][0]["embedding"]  # length 1536
+
+    # 4. Insert into Postgres
+    db = next(get_db())
+    new_ws = Worksheet(
+        prompt_json=data,
+        status="pending",
+        embedding=vector
+    )
+    db.add(new_ws)
+    db.commit()
+    job_id = new_ws.id
+
+    # 5. Spawn background job
+    def bg_task(jid):
+        import asyncio
+        asyncio.run(run_generation_job(str(jid)))
+    threading.Thread(target=bg_task, args=(job_id,)).start()
+
+    # 6. Return job_id
+    return jsonify({"job_id": str(job_id)}), 202
+
+4.4. API: Check Status (GET /api/worksheet/<job_id>/status)
+
+@app.route("/api/worksheet/<job_id>/status", methods=["GET"])
+@login_required
+def get_worksheet_status_api(job_id):
+    """
+    1. Query Postgres for Worksheet with id=job_id.
+    2. If not found, return 404.
+    3. Return JSON { status, pdf_url?, interactive_url?, error_message? }.
+    """
+    db = next(get_db())
+    ws = db.query(Worksheet).filter(Worksheet.id == job_id).first()
+    if not ws:
+        return jsonify({"error": "Not found"}), 404
+
+    result = {"status": ws.status}
+    if ws.status == "done":
+        result["pdf_url"] = f"/worksheets/{job_id}/worksheet.pdf"
+        result["interactive_url"] = f"/worksheets/{job_id}/interactive.html"
+    if ws.status == "error":
+        result["error_message"] = ws.error_message
+    return jsonify(result), 200
+
+4.5. Serve Generated Files (/worksheets/<job_id>/*)
+
+@app.route("/worksheets/<job_id>/<filename>")
+@login_required
+def serve_generated_file(job_id, filename):
+    """
+    Serve files from local directory worksheets/<job_id>/<filename>.
+    E.g. /worksheets/<job_id>/worksheet.pdf or interactive.html.
+    """
+    base_dir = os.path.join(os.getcwd(), "worksheets", job_id)
+    if not os.path.exists(os.path.join(base_dir, filename)):
+        abort(404)
+    return send_from_directory(base_dir, filename)
+
+
+⸻
+
+5. BACKGROUND WORKER: worker.py
+
+# worker.py
+
+import os
+import asyncio
+import tempfile
+import shutil
+import json
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+from config import DATABASE_URL, OPENAI_API_KEY, IMAGE_SERVER_URL
+from models import Worksheet, Base
+from llm_client import generate_worksheet_spec
+from image_client import fetch_line_art_image
+from pdf_generator import create_pdf_from_spec
+from interactive_generator import generate_interactive_html
+
+# Prepare SQLAlchemy session
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine)
+
+async def run_generation_job(job_id: str):
+    """
+    Steps:
+      1. Fetch the Worksheet row (prompt_json) from Postgres.
+      2. Update status="in_progress".
+      3. Call OpenAI Completions to get a strict JSON spec.
+      4. For each image in spec["images"], call OpenAI Images API to get PNG.
+      5. Assemble PDF with ReportLab + CairoSVG.
+      6. Generate interactive HTML via Jinja2.
+      7. Write files under worksheets/<job_id>/.
+      8. Update Postgres row: status="done", pdf_path, interactive_path.
+      9. On exception, update status="error", error_message.
+    """
+    db = SessionLocal()
+    ws = db.query(Worksheet).filter(Worksheet.id == job_id).first()
+    if not ws:
+        db.close()
+        return
+
+    try:
+        # 2. Update status
+        ws.status = "in_progress"
+        db.commit()
+
+        prompt_json = ws.prompt_json
+
+        # 3. Generate spec via OpenAI Completions
+        spec = generate_worksheet_spec(prompt_json)
+
+        # 4. Create temp folder and fetch images
+        tmp_dir = tempfile.mkdtemp(prefix=f"ws_{job_id}_")
+        image_folder = os.path.join(tmp_dir, "images")
+        os.makedirs(image_folder, exist_ok=True)
+
+        # If spec["images"] exists, fetch each via OpenAI Images
+        import openai
+        openai.api_key = OPENAI_API_KEY
+
+        for img in spec.get("images", []):
+            key = img["key"]
+            prompt = img["prompt"]
+            # Call OpenAI Images API
+            img_resp = openai.Image.create(
+                prompt=prompt,
+                n=1,
+                size="512x512",
+                response_format="b64_json"
+            )
+            b64_data = img_resp["data"][0]["b64_json"]
+            import base64
+            png_bytes = base64.b64decode(b64_data)
+            # Save PNG
+            with open(os.path.join(image_folder, f"{key}.png"), "wb") as f:
+                f.write(png_bytes)
+
+        # 5. Create PDF
+        job_folder = os.path.join("worksheets", job_id)
+        os.makedirs(job_folder, exist_ok=True)
+        pdf_path = os.path.join(job_folder, "worksheet.pdf")
+        create_pdf_from_spec(job_id, spec, image_folder, pdf_path)
+
+        # 6. Generate interactive HTML
+        interactive_html_path = os.path.join(job_folder, "interactive.html")
+        generate_interactive_html(job_id, spec, image_folder, interactive_html_path)
+
+        # 7. Update Postgres row
+        ws.status = "done"
+        ws.pdf_path = f"worksheets/{job_id}/worksheet.pdf"
+        ws.interactive_path = f"worksheets/{job_id}/interactive.html"
+        db.commit()
+
+    except Exception as e:
+        # 8. On error
+        ws.status = "error"
+        ws.error_message = str(e)
+        db.commit()
+    finally:
+        db.close()
+        # 9. Clean up temp folder
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+⸻
+
+6. LLM & IMAGE HELPERS
+
+6.1. llm_client.py
+
+# llm_client.py
+
+import os
+import json
+import openai
+from config import OPENAI_API_KEY
+
+openai.api_key = OPENAI_API_KEY
+
+def generate_worksheet_spec(prompt_json: dict) -> dict:
+    """
+    Same “strict JSON” schema as before. Uses GPT-4 to return exactly that JSON.
+    """
+    system_prompt = (
+        "You are an AI worksheet designer for young ESL students (pre-K to grade 3). "
+        "Input: A JSON object with keys:\n"
+        "  - gradeLevel: one of [\"pre-K\",\"K\",\"1\",\"2\",\"3\"]\n"
+        "  - topic: string\n"
+        "  - activities: [ { type: \"traceWord\"|\"colorImage\"|\"match\", data: {...} } ]\n"
+        "  - style: \"line_art\"|\"color\"\n"
+        "  - imagesAllowed: true|false\n"
+        "Output: A JSON object EXACTLY in this schema:\n"
+        "{\n"
+        "  \"title\": string,\n"
+        "  \"gradeLevel\": string,\n"
+        "  \"layout\": [\n"
+        "    {\n"
+        "      \"elementType\": \"text\"|\"trace\"|\"image\",\n"
+        "      \"content\": string,\n"
+        "      \"coordinates\": {\"x\": int, \"y\": int, \"width\": int, \"height\": int},\n"
+        "      \"fontSize\": int,\n"
+        "      \"fontFamily\": string\n"
+        "    },\n"
+        "    {\n"
+        "      \"elementType\": \"image\",\n"
+        "      \"key\": string,\n"
+        "      \"prompt\": string,\n"
+        "      \"coordinates\": {\"x\": int, \"y\": int, \"width\": int, \"height\": int}\n"
+        "    },\n"
+        "    ...\n"
+        "  ],\n"
+        "  \"images\": [\n"
+        "    {\"key\": string, \"prompt\": string},\n"
+        "    ...\n"
+        "  ]\n"
+        "}\n"
+        "Rules:\n"
+        "  1. Single page: 612×792 points (72 dpi). Coordinates refer to top-left.\n"
+        "  2. Every \"image\" element in layout must match an entry in \"images\" array.\n"
+        "  3. If activities include traceWord, include trace elements; if colorImage, include image elements.\n"
+        "  4. Output ONLY the JSON (no extra text).\n\n"
+        "TeacherPromptJSON:\n" + json.dumps(prompt_json)
+    )
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": system_prompt}],
+        temperature=0.1
+    )
+    spec_text = response.choices[0].message.content.strip()
+    return json.loads(spec_text)
+
+6.2. image_client.py
+
+# image_client.py
+
+import os
+import base64
+import openai
+from config import OPENAI_API_KEY
+
+openai.api_key = OPENAI_API_KEY
+
+async def fetch_line_art_image(key: str, prompt: str) -> bytes:
+    """
+    Calls OpenAI Images API to generate a 512×512 black-and-white PNG from the prompt.
+    Returns raw PNG bytes.
+    """
+    img_resp = openai.Image.create(
+        prompt=prompt,
+        n=1,
+        size="512x512",
+        response_format="b64_json"
+    )
+    b64_data = img_resp["data"][0]["b64_json"]
+    png_bytes = base64.b64decode(b64_data)
+    return png_bytes
+
+Note: Here we do NOT call a local Ollama endpoint; we rely on OpenAI Images API.  If you want to swap in a local Ollama model for image generation, you can change this function accordingly, but for MVP we use OpenAI.
+
+⸻
+
+7. PDF & INTERACTIVE HTML GENERATORS
+
+7.1. pdf_generator.py
+
+# pdf_generator.py
+
+import os
+import cairosvg
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+def create_pdf_from_spec(job_id: str, spec: dict, image_folder: str, output_path: str):
+    """
+    Build a one-page PDF (612×792 points) from spec.layout. Embed PNG images.
+    Convert any SVGs to PNG via CairoSVG (if needed).
+    """
+    # Register a dotted font if available
+    font_path = os.path.join(os.path.dirname(__file__), "fonts", "KGPrimaryDotted.ttf")
+    if os.path.exists(font_path):
+        try:
+            pdfmetrics.registerFont(TTFont("DottedFont", font_path))
+        except:
+            pass
+
+    c = canvas.Canvas(output_path, pagesize=letter)
+    page_w, page_h = letter  # 612×792
+
+    for element in spec["layout"]:
+        etype = element["elementType"]
+        x = element["coordinates"]["x"]
+        y = element["coordinates"]["y"]
+        w = element["coordinates"]["width"]
+        h = element["coordinates"]["height"]
+        draw_y = page_h - y - h  # convert top-based to bottom-based
+
+        if etype == "text":
+            font = element.get("fontFamily", "Helvetica")
+            size = element.get("fontSize", 24)
+            c.setFont(font, size)
+            c.drawString(x, draw_y, element["content"])
+
+        elif etype == "trace":
+            size = element.get("fontSize", 48)
+            font = "DottedFont" if "DottedFont" in pdfmetrics.getRegisteredFontNames() else "Courier"
+            c.setFont(font, size)
+            c.drawString(x, draw_y, element["content"])
+
+        elif etype == "image":
+            key = element["key"]
+            png_path = os.path.join(image_folder, f"{key}.png")
+            if not os.path.exists(png_path):
+                # maybe an SVG exists → convert to PNG
+                svg_path = os.path.join(image_folder, f"{key}.svg")
+                if os.path.exists(svg_path):
+                    cairosvg.svg2png(url=svg_path, write_to=png_path, output_width=w, output_height=h)
+                else:
+                    raise FileNotFoundError(f"No image file for key {key}")
+            img = ImageReader(png_path)
+            c.drawImage(img, x, draw_y, width=w, height=h, mask="auto")
+
+    c.showPage()
+    c.save()
+
+7.2. interactive_generator.py
+
+# interactive_generator.py
+
+import os
+from jinja2 import Environment, FileSystemLoader
+
+TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
+env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+
+def generate_interactive_html(job_id: str, spec: dict, image_folder: str, output_html_path: str):
+    """
+    Create a standalone HTML that mirrors the PDF layout. CSS uses absolute positioning.
+    Each image must be referenced as: /worksheets/<job_id>/<key>.png
+    """
+    data = {
+        "pageWidth": 612,
+        "pageHeight": 792,
+        "elements": []
+    }
+
+    for el in spec["layout"]:
+        etype = el["elementType"]
+        x = el["coordinates"]["x"]
+        y = el["coordinates"]["y"]
+        w = el["coordinates"]["width"]
+        h = el["coordinates"]["height"]
+        # Convert points→px (96 dpi)
+        css_top = (y / 72) * 96
+        css_left = (x / 72) * 96
+        css_width = (w / 72) * 96
+        css_height = (h / 72) * 96
+
+        if etype == "text":
+            data["elements"].append({
+                "type": "text",
+                "content": el["content"],
+                "style": {
+                    "position": "absolute",
+                    "top": f"{css_top}px",
+                    "left": f"{css_left}px",
+                    "fontFamily": el.get("fontFamily", "Arial, sans-serif"),
+                    "fontSize": f"{el.get('fontSize',24)}px"
+                }
+            })
+        elif etype == "trace":
+            data["elements"].append({
+                "type": "trace",
+                "content": el["content"],
+                "style": {
+                    "position": "absolute",
+                    "top": f"{css_top}px",
+                    "left": f"{css_left}px",
+                    "fontFamily": "Courier New, monospace",
+                    "fontSize": f"{el.get('fontSize',48)}px",
+                    "color": "transparent",
+                    "WebkitTextStroke": "1px black",
+                    "WebkitTextStrokeDashArray": "5,5"
+                }
+            })
+        elif etype == "image":
+            key = el["key"]
+            public_url = f"/worksheets/{job_id}/{key}.png"
+            data["elements"].append({
+                "type": "image",
+                "src": public_url,
+                "style": {
+                    "position": "absolute",
+                    "top": f"{css_top}px",
+                    "left": f"{css_left}px",
+                    "width": f"{css_width}px",
+                    "height": f"{css_height}px"
+                }
+            })
+
+    template = env.get_template("interactive_template.html.j2")
+    rendered = template.render(data=data)
+
+    os.makedirs(os.path.dirname(output_html_path), exist_ok=True)
+    with open(output_html_path, "w") as f:
+        f.write(rendered)
+
+
+⸻
+
+7.3. templates/interactive_template.html.j2
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interactive Worksheet</title>
+  <style>
+    body, html { margin: 0; padding: 0; }
+    #worksheet-container {
+      position: relative;
+      width: {{ pageWidth/72*96 }}px;
+      height: {{ pageHeight/72*96 }}px;
+      border: 1px solid #000;
+    }
+  </style>
+</head>
+<body>
+  <div id="worksheet-container">
+    {% for el in elements %}
+      {% if el.type == "text" %}
+        <div style="{{ el.style | tojson | safe }}">{{ el.content }}</div>
+      {% elif el.type == "trace" %}
+        <div style="{{ el.style | tojson | safe }}">{{ el.content }}</div>
+      {% elif el.type == "image" %}
+        <img src="{{ el.src }}" style="{{ el.style | tojson | safe }}" alt="worksheet image" />
+      {% endif %}
+    {% endfor %}
+  </div>
+</body>
+</html>
+
+
+⸻
+
+8. BACKEND: REMAINING FLASK SETUP & PROCFILE
+
+We have already shown most of app.py above.  Now finish app.py by adding the worker routes and running the app.
+
+8.1. app.py (continued)
+
+Below is the complete app.py.  It stitches together all pieces:
+
+# app.py
+
+import os
+import threading
+import uuid
+import requests
+import google.oauth2.id_token
+import google.auth.transport.requests
+
+from flask import Flask, request, redirect, url_for, session, jsonify, send_from_directory, abort
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from config import DATABASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OPENAI_API_KEY
+from models import Base, Worksheet
+from llm_client import generate_worksheet_spec
+from image_client import fetch_line_art_image
+from pdf_generator import create_pdf_from_spec
+from interactive_generator import generate_interactive_html
+from worker import run_generation_job
+
+# Flask app
+app = Flask(__name__, static_folder="static")
+app.secret_key = os.urandom(24)
+
+# Flask-Login
+login_manager = LoginManager()
+login_manager.login_view = "login"
+login_manager.init_app(app)
+
+# SQLAlchemy
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine)
+
+# User class for Flask-Login
+class User(UserMixin):
+    def __init__(self, email):
+        self.id = email
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User(user_id)
+
+# Google OAuth
+GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # HTTP allowed for testing
+
+def get_google_provider_cfg():
+    return requests.get(GOOGLE_DISCOVERY_URL).json()
+
+@app.route("/login")
+def login():
+    flow = google_auth_oauthlib.flow.Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [url_for("callback", _external=True)],
+                "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo"
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email"]
+    )
+    flow.redirect_uri = url_for("callback", _external=True)
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true"
+    )
+    session["state"] = state
+    return redirect(authorization_url)
+
+@app.route("/callback")
+def callback():
+    state = session["state"]
+    flow = google_auth_oauthlib.flow.Flow.from_client_config(
+        {
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [url_for("callback", _external=True)],
+                "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo"
+            }
+        },
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email"],
+        state=state
+    )
+    flow.redirect_uri = url_for("callback", _external=True)
+    authorization_response = request.url
+    flow.fetch_token(authorization_response=authorization_response)
+    credentials = flow.credentials
+
+    request_session = google.auth.transport.requests.Request()
+    id_info = google.oauth2.id_token.verify_oauth2_token(
+        credentials._id_token,
+        request_session,
+        GOOGLE_CLIENT_ID
+    )
+    email = id_info.get("email")
+    user = User(email)
+    login_user(user)
+    return redirect(url_for("index"))
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("index"))
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@app.route("/")
+def index():
+    if not current_user.is_authenticated:
+        return redirect(url_for("login"))
+    return send_from_directory("static", "index.html")
+
+@app.route("/api/worksheet", methods=["POST"])
+@login_required
+def create_worksheet_api():
+    data = request.get_json()
+    required = {"gradeLevel", "topic", "activities", "style", "imagesAllowed"}
+    if not data or not required.issubset(data.keys()):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    # Compute embedding
+    import openai
+    openai.api_key = OPENAI_API_KEY
+    embed_resp = openai.Embedding.create(model="text-embedding-ada-002", input=data["topic"])
+    vector = embed_resp["data"][0]["embedding"]
+
+    # Insert into Postgres
+    db = next(get_db())
+    new_ws = Worksheet(
+        prompt_json=data,
+        status="pending",
+        embedding=vector
+    )
+    db.add(new_ws)
+    db.commit()
+    job_id = new_ws.id
+
+    def bg_task(jid):
+        import asyncio
+        asyncio.run(run_generation_job(str(jid)))
+
+    threading.Thread(target=bg_task, args=(job_id,)).start()
+
+    return jsonify({"job_id": str(job_id)}), 202
+
+@app.route("/api/worksheet/<job_id>/status", methods=["GET"])
+@login_required
+def get_worksheet_status_api(job_id):
+    db = next(get_db())
+    ws = db.query(Worksheet).filter(Worksheet.id == job_id).first()
+    if not ws:
+        return jsonify({"error": "Not found"}), 404
+    result = {"status": ws.status}
+    if ws.status == "done":
+        result["pdf_url"] = f"/worksheets/{job_id}/worksheet.pdf"
+        result["interactive_url"] = f"/worksheets/{job_id}/interactive.html"
+    if ws.status == "error":
+        result["error_message"] = ws.error_message
+    return jsonify(result), 200
+
+@app.route("/worksheets/<job_id>/<filename>")
+@login_required
+def serve_generated_file(job_id, filename):
+    base_dir = os.path.join(os.getcwd(), "worksheets", job_id)
+    if not os.path.exists(os.path.join(base_dir, filename)):
+        abort(404)
+    return send_from_directory(base_dir, filename)
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+
+⸻
+
+8.2. Procfile
+
+web: gunicorn app:app
+
+This instructs Replit (or Heroku) to run the Flask app in production.
+
+⸻
+
+9. STATIC FRONTEND (HTML / CSS / JS)
+
+9.1. static/index.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Worksheet Generator</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Teacher Worksheet Generator</h1>
+
+    <!-- Step 1: Input Form -->
+    <div id="step1" class="step">
+      <label>Grade Level:
+        <select id="gradeLevel">
+          <option value="pre-K">Pre-K</option>
+          <option value="K">K</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+        </select>
+      </label>
+      <br />
+      <label>Topic / Description:
+        <input type="text" id="topic" placeholder="e.g. Letter R Worksheet" />
+      </label>
+      <br />
+      <fieldset>
+        <legend>Activities:</legend>
+        <label><input type="checkbox" id="act-trace" /> Trace Words</label>
+        <label><input type="checkbox" id="act-color" /> Color Images</label>
+        <label><input type="checkbox" id="act-match" /> Matching</label>
+      </fieldset>
+      <br />
+      <label>Style:
+        <select id="style">
+          <option value="line_art">Line Art (B/W)</option>
+          <option value="color">Color</option>
+        </select>
+      </label>
+      <br />
+      <label><input type="checkbox" id="imagesAllowed" checked /> Images Allowed</label>
+      <br />
+      <button id="submitBtn">Generate Worksheet</button>
+    </div>
+
+    <!-- Step 2: Status / Loading -->
+    <div id="step2" class="step hidden">
+      <h2>Generating Worksheet…</h2>
+      <p>Job ID: <span id="displayJobId"></span></p>
+      <p>Status: <span id="displayStatus">pending</span></p>
+      <p>Please wait. This may take up to 30 seconds.</p>
+    </div>
+
+    <!-- Step 3: Results -->
+    <div id="step3" class="step hidden">
+      <h2>Worksheet Ready!</h2>
+      <a id="pdfLink" href="#" target="_blank"><button>Download PDF</button></a>
+      <br /><br />
+      <h3>Interactive Preview</h3>
+      <iframe id="interactiveFrame" src="" class="iframe-preview"></iframe>
+    </div>
+
+    <br />
+    <a href="/logout">Logout</a>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
+
+9.2. static/style.css
+
+/* style.css */
+
+body {
+  font-family: Arial, sans-serif;
+  background-color: #f9f9f9;
+  margin: 0;
+  padding: 20px;
+}
+
+.container {
+  max-width: 600px;
+  margin: auto;
+  background: #fff;
+  padding: 20px;
+  border-radius: 6px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+h1, h2, h3 {
+  text-align: center;
+}
+
+label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 1rem;
+}
+
+input[type="text"],
+select {
+  width: 100%;
+  padding: 8px;
+  margin-top: 4px;
+  margin-bottom: 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+fieldset {
+  border: 1px solid #ccc;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+legend {
+  font-weight: bold;
+}
+
+button {
+  background-color: #007bff;
+  color: #fff;
+  border: none;
+  padding: 10px 18px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+button:hover {
+  background-color: #0056b3;
+}
+
+.hidden {
+  display: none;
+}
+
+.iframe-preview {
+  width: 100%;
+  height: 600px;
+  border: 1px solid #ccc;
+}
+
+9.3. static/script.js
+
+// script.js
+
+document.addEventListener("DOMContentLoaded", () => {
+  const step1Div = document.getElementById("step1");
+  const step2Div = document.getElementById("step2");
+  const step3Div = document.getElementById("step3");
+
+  const gradeLevelInput = document.getElementById("gradeLevel");
+  const topicInput = document.getElementById("topic");
+  const actTrace = document.getElementById("act-trace");
+  const actColor = document.getElementById("act-color");
+  const actMatch = document.getElementById("act-match");
+  const styleInput = document.getElementById("style");
+  const imagesAllowedInput = document.getElementById("imagesAllowed");
+  const submitBtn = document.getElementById("submitBtn");
+
+  const displayJobId = document.getElementById("displayJobId");
+  const displayStatus = document.getElementById("displayStatus");
+  const pdfLink = document.getElementById("pdfLink");
+  const interactiveFrame = document.getElementById("interactiveFrame");
+
+  let jobId = null;
+  let statusCheckInterval = null;
+
+  // Base URL for Flask API is the same origin (empty string)
+  const API_BASE = "";
+
+  submitBtn.addEventListener("click", () => {
+    const gradeLevel = gradeLevelInput.value;
+    const topic = topicInput.value.trim();
+    const activities = [];
+    if (actTrace.checked) activities.push({ type: "traceWord", data: {} });
+    if (actColor.checked) activities.push({ type: "colorImage", data: {} });
+    if (actMatch.checked) activities.push({ type: "match", data: {} });
+    const style = styleInput.value;
+    const imagesAllowed = imagesAllowedInput.checked;
+
+    if (!topic) {
+      alert("Please enter a topic or description.");
+      return;
+    }
+
+    const payload = {
+      gradeLevel: gradeLevel,
+      topic: topic,
+      activities: activities,
+      style: style,
+      imagesAllowed: imagesAllowed,
+    };
+
+    fetch(`${API_BASE}/api/worksheet`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to submit prompt.");
+        return res.json();
+      })
+      .then((data) => {
+        jobId = data.job_id;
+        displayJobId.textContent = jobId;
+        step1Div.classList.add("hidden");
+        step2Div.classList.remove("hidden");
+        pollStatus();
+      })
+      .catch((err) => {
+        alert("Error: " + err.message);
+      });
+  });
+
+  function pollStatus() {
+    if (!jobId) return;
+    statusCheckInterval = setInterval(() => {
+      fetch(`${API_BASE}/api/worksheet/${jobId}/status`, {
+        credentials: "include",
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error("Status check failed.");
+          return res.json();
+        })
+        .then((data) => {
+          displayStatus.textContent = data.status;
+          if (data.status === "done") {
+            clearInterval(statusCheckInterval);
+            pdfLink.href = data.pdf_url;
+            pdfLink.textContent = "Download PDF";
+            interactiveFrame.src = data.interactive_url;
+            step2Div.classList.add("hidden");
+            step3Div.classList.remove("hidden");
+          }
+          if (data.status === "error") {
+            clearInterval(statusCheckInterval);
+            alert("Error: " + data.error_message);
+            window.location.reload();
+          }
+        })
+        .catch((err) => {
+          clearInterval(statusCheckInterval);
+          alert("Error checking status: " + err.message);
+          window.location.reload();
+        });
+    }, 2000);
+  }
+});
+
+
+⸻
+
+10. DEPLOYMENT
+
+Follow these exact steps to deploy and verify everything:
+
+10.1. Create DB Table (if not already)
+
+If you haven’t yet run models.py to create the table, do:
+
+python - << 'EOF'
+from sqlalchemy import create_engine
+from config import DATABASE_URL
+from models import Base
+
+engine = create_engine(DATABASE_URL)
+Base.metadata.create_all(engine)
+print("Table 'worksheets' created.")
+EOF
+
+10.2. Run the Flask App Locally (in Replit “Run” button or console)
+
+python app.py
+
+	•	Verify:
+	•	Go to http://<replit-url>/login → Google OAuth prompt.
+	•	After logging in, you should see the form.
+	•	Fill in form → ensure no CORS issues appear.
+	•	Check in Postgres that a new row is created with status="pending".
+	•	Wait until status changes to done (poll in DB or watch Replit console logs).
+	•	Confirm the PDF and interactive HTML files appear under worksheets/<job_id>/.
+
+10.3. Deploy to Replit “Always On” (make sure “Run” command in Replit points to python app.py).
+	•	Replit will automatically host your app at https://<your‐replit‐slug>.repl.co/.
+
+10.4. Verify End‐to‐End on Replit Public URL
+	1.	Visit https://<your‐replit‐slug>.repl.co/login → complete Google OAuth.
+	2.	Fill out the form → “Generate Worksheet.”
+	3.	In DevTools, watch network calls:
+	•	POST /api/worksheet → response { "job_id": "<UUID>" }.
+	•	Replit Postgres has one row { id: UUID, status: "pending" }.
+	4.	When done, the form area hides, “Generating…” appears, then automatically shows a “Download PDF” link and <iframe>.
+	5.	Click PDF → PDF must open in a new tab, showing a single page with line-art and traceable text.
+	6.	Check the <iframe> → it should render the interactive HTML identically to the PDF.
+
+⸻
+
+11. FINAL CHECKS & MAINTENANCE
+	1.	Error Handling
+	•	Temporarily break the OpenAI API key (set OPENAI_API_KEY=""), submit a worksheet → after a minute, status should become "error" and the frontend must show an alert with error_message.
+	•	Check that error_message in Postgres contains the exception.
+	2.	Embedding & Search (Bonus)
+	•	You stored an embedding vector for each worksheet’s “topic.”
+	•	In future, you can run similarity searches via SELECT * FROM worksheets ORDER BY embedding <-> '[0.123,0.456,…]' LIMIT 5;.
+	•	(This is optional and requires pgvector to be installed.)
+	3.	Disk Persistence
+	•	Replit’s filesystem is ephemeral but persists while the repl is running.
+	•	Generated worksheets/<job_id>/ files remain until the repl restarts.
+	•	You may want to periodically back up or move old files if needed.
+	4.	Scaling
+	•	For a few worksheets/day, a single Replit instance is fine.
+	•	If many teachers use it, consider adding a queue or replit workers feature.
+	5.	Ollama Integration (Optional)
+	•	If you have a local Ollama endpoint at http://localhost:11434, you can modify llm_client.py to:
+
+import requests
+def generate_worksheet_spec(prompt_json):
+    # Instead of OpenAI, POST to local Ollama:11434/v1/complete with your prompt.
+    resp = requests.post("http://localhost:11434/v1/complete", json={ 
+        "model": "llama3.2-3b-instruct",
+        "prompt": "<...system+user prompt...>"
+    })
+    spec_text = resp.json()["choices"][0]["text"]
+    return json.loads(spec_text)
+
+
+	•	Leave the rest of the pipeline unchanged.  For MVP, skip Ollama and use OpenAI.
+
+⸻
+
+12. SUMMARY CHECKLIST FOR REPLIT AGENT
+
+Below is a strict, numbered checklist the Replit AI agent must follow.  Do not do anything else or reorder steps.
+	1.	Create files/folders in the Replit project exactly as shown:
+
+app.py
+config.py
+models.py
+llm_client.py
+image_client.py
+pdf_generator.py
+interactive_generator.py
+worker.py
+requirements.txt
+Procfile
+templates/interactive_template.html.j2
+static/index.html
+static/style.css
+static/script.js
+worksheets/            (empty folder)
+
+
+	2.	Populate requirements.txt with:
+
+Flask>=2.0
+python-dotenv>=0.21
+psycopg2-binary>=2.9
+SQLAlchemy>=1.4
+pgvector>=0.4
+Flask-Login>=0.6
+google-auth>=2.6
+google-auth-oauthlib>=0.4
+google-auth-httplib2>=0.1
+requests>=2.26
+openai>=0.27
+reportlab>=3.6
+cairosvg>=2.0
+Jinja2>=3.1
+gunicorn>=20.1
+
+
+	3.	Install dependencies via:
+
+pip install -r requirements.txt
+
+
+	4.	Paste the exact contents of config.py (step 2.1).
+	5.	Paste the exact contents of models.py (step 2.2).
+	6.	Run the one‐shot block to create the Postgres worksheets table with pgvector (step 2.3).
+	7.	Paste the exact contents of all code files (app.py, llm_client.py, image_client.py, pdf_generator.py, interactive_generator.py, worker.py) from sections 4, 6, 7, and 8.
+	8.	Paste the exact Jinja2 template templates/interactive_template.html.j2 (step 7.3).
+	9.	Paste the static frontend files in static/:
+	•	index.html (step 9.1)
+	•	style.css (step 9.2)
+	•	script.js (step 9.3)
+	10.	Add Procfile with:
+
+web: gunicorn app:app
+
+
+	11.	Verify no import errors exist.  Fix any minor syntax typos.
+	12.	Run in Replit (click “Run”):
+
+python app.py
+
+
+	13.	Open browser to https://<your-replit-slug>.repl.co/login.
+	•	Confirm Google OAuth works (redirect to Google, then back to / showing the form).
+	14.	Open a separate Replit shell and test creating a worksheet via curl:
+
+curl -X POST https://<your-replit-slug>.repl.co/api/worksheet \
+  -H "Content-Type: application/json" \
+  -b "connect.sid=<your-session-cookie>" \
+  -d '{
+    "gradeLevel":"K",
+    "topic":"Letter R",
+    "activities":[{"type":"traceWord","data":{}}],
+    "style":"line_art",
+    "imagesAllowed":true
+  }'
+
+	•	(Use your browser’s Developer Tools to extract the connect.sid cookie after logging in.)
+	•	Expect: {"job_id":"<UUID>"}
+
+	15.	Verify in Replit Postgres that a new row appears with status="pending", correct prompt_json, and a non-null embedding.
+	16.	Wait ~20–30 seconds.  In the browser, the form area should hide and “Generating…” appear.
+	17.	Poll https://<your-replit-slug>.repl.co/api/worksheet/<job_id>/status (in browser or curl) until status="done".
+	•	Expect JSON: {"status":"done","pdf_url":"/worksheets/<job_id>/worksheet.pdf","interactive_url":"/worksheets/<job_id>/interactive.html"}.
+	18.	Click “Download PDF.”  Confirm the PDF is a one-page worksheet with text + line-art.
+	19.	Check <iframe> for the interactive page.  Confirm it matches the PDF.
+	20.	Test error condition: temporarily unset OPENAI_API_KEY (in Replit Secrets), push code, submit a worksheet → ensure status="error" is returned and error_message appears.
+	21.	Test logout: click “Logout” → ensure session resets → trying to access / redirects to /login.
+	22.	(Optional) Ollama: If available, swap llm_client.generate_worksheet_spec to call your local Ollama endpoint. Test that it still produces valid JSON.
+	23.	Ensure the worksheets/ directory on Replit holds subfolders per job_id (each containing worksheet.pdf and interactive.html).
+	24.	Cleanup checks:
+	•	Confirm embeddings can be queried in Postgres with SELECT * FROM worksheets ORDER BY embedding <-> '[0.1,0.2,…]' LIMIT 5;.
+	•	Confirm file paths and database paths match exactly.
+	25.	Final verification:
+	•	Refresh the browser and generate a second worksheet with different inputs to confirm reproducibility.
+	•	Confirm old worksheets remain accessible (/worksheets/<old_job_id>/worksheet.pdf).
+
+⸻
+
+End of specification. Follow each step exactly (including file names, code contents, and commands) to produce a working Teacher‐Aware Worksheet Generator using only Python, HTML/CSS/JS, OpenAI APIs, Replit Postgres+pgvector, Google OAuth, and (optionally) Ollama.
