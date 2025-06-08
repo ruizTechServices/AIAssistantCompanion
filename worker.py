@@ -1,6 +1,26 @@
 import threading
 import logging
 
+# Supabase client for uploading generated files
+try:
+    from supabase_client import supabase
+except Exception as e:  # Supabase may not be configured in dev
+    supabase = None
+    logging.warning(f"Supabase client not available: {e}")
+
+def upload_to_supabase(local_path: str, remote_path: str) -> str:
+    """Upload a file to Supabase Storage and return the public URL."""
+    if not supabase:
+        return local_path
+    try:
+        with open(local_path, "rb") as f:
+            supabase.storage.from_("worksheets").upload(remote_path, f, upsert=True)
+        public_url = supabase.storage.from_("worksheets").get_public_url(remote_path)
+        return public_url
+    except Exception as e:
+        logging.error(f"Failed to upload {local_path} to Supabase: {e}")
+        return local_path
+
 def start_generation_job(job_id):
     """Start background thread for worksheet generation."""
     logging.info(f"Starting generation thread for job {job_id}")
@@ -86,16 +106,20 @@ def run_generation_job(job_id):
             logging.info(f"Step 3/4: Generating PDF for {job_id}")
             pdf_path = create_pdf_from_spec(spec, job_id, images_data)
             logging.info(f"PDF generated: {pdf_path}")
+            pdf_url = upload_to_supabase(pdf_path, f"{job_id}/worksheet.pdf")
+            logging.info(f"PDF uploaded to: {pdf_url}")
             
             # Generate interactive HTML
             logging.info(f"Step 4/4: Generating interactive HTML for {job_id}")
             html_path = generate_interactive_html(spec, job_id, images_data)
             logging.info(f"Interactive HTML generated: {html_path}")
+            html_url = upload_to_supabase(html_path, f"{job_id}/interactive.html")
+            logging.info(f"HTML uploaded to: {html_url}")
             
             # Update worksheet record
             worksheet.status = "done"
-            worksheet.pdf_path = pdf_path
-            worksheet.interactive_path = html_path
+            worksheet.pdf_path = pdf_url
+            worksheet.interactive_path = html_url
             db.session.commit()
             
             logging.info(f"Successfully completed worksheet generation for {job_id}")
