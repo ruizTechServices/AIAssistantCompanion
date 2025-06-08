@@ -1,6 +1,6 @@
 # AI Assistant Companion
 
-# <!-- <<<<<<< 91l7af-codex/find-and-fix-a-bug-in-codebase
+
 This Flask application generates AI-powered worksheets and stores worksheet metadata in Postgres.
 
 =======
@@ -8,7 +8,7 @@ This Flask application generates AI-powered worksheets and stores worksheet meta
 This Flask application generates AI-powered worksheets and stores worksheet metadata in Postgres.
 
 
-# >>>>>>> main -->
+
 ## Environment Variables
 
 Create a `.env` file with the following variables:
@@ -18,7 +18,7 @@ Create a `.env` file with the following variables:
 - `DATABASE_URL`: PostgreSQL connection string (from Supabase or other host).
 - `GOOGLE_OAUTH_CLIENT_ID`: Google OAuth client ID.
 - `GOOGLE_OAUTH_CLIENT_SECRET`: Google OAuth client secret.
-<!-- <<<<<<< 91l7af-codex/find-and-fix-a-bug-in-codebase
+
 - `GOOGLE_REDIRECT_URL` (optional): OAuth redirect URI for local development.
 - `SUPABASE_URL`: URL of your Supabase project.
 - `SUPABASE_SERVICE_KEY`: Service role key for Supabase (used for storage uploads).
@@ -26,14 +26,13 @@ Create a `.env` file with the following variables:
 
 - `GOOGLE_REDIRECT_URL` (optional): OAuth redirect URI for local development.
 
-# >>>>>>> main -->
+
 
 If you integrate Pinecone, also add:
 
 - `PINECONE_API_KEY`: Pinecone API key.
 - `PINECONE_ENV`: Pinecone environment region name.
 
-# <!-- <<<<<<< 91l7af-codex/find-and-fix-a-bug-in-codebase
 ## Supabase and Pinecone
 
 The application connects to a Supabase Postgres database via `DATABASE_URL` and uploads generated worksheets to the `worksheets` storage bucket. Pinecone can be enabled to store text embeddings.
@@ -42,4 +41,4 @@ The application connects to a Supabase Postgres database via `DATABASE_URL` and 
 ## Supabase and Pinecone
 
 To migrate, connect SQLAlchemy to the Supabase Postgres URL and configure Pinecone to store embeddings instead of the Postgres `embedding` array. Use Supabase Auth or Google OAuth for authentication.
-# >>>>>>> main -->
+
