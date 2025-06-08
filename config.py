@@ -9,7 +9,14 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 
 # Validate required environment variables
-required_vars = ["DATABASE_URL", "OPENAI_API_KEY", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"]
+required_vars = [
+    "DATABASE_URL",
+    "OPENAI_API_KEY",
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_KEY",
+]
 missing_vars = [var for var in required_vars if not os.getenv(var)]
 
 if missing_vars:
